@@ -109,7 +109,8 @@ const WorkoutSession: React.FC<WorkoutSessionProps> = ({ exercises }) => {
   }, [phase, currentExercise, isPaused, startPhase, exercises]);
 
   
-  const pickMotToken = (seed: number) => `mot_${((seed % 10) + 1)}`;
+    const pickGoToken = (seed: number) => `go_${((seed % 5) + 1)}`;
+const pickMotToken = (seed: number) => `mot_${((seed % 10) + 1)}`;
 useEffect(() => {
     // Prevent redirect if we are just loading state or have valid exercises
     if (!exercises.length) { 
@@ -148,6 +149,9 @@ useEffect(() => {
             } else {
               const initialSec = Math.ceil(totalTimeMs / 1000);
 
+              // Human mode: for long PREP, prefer short coaching lines over counting every number.
+              const prepHumanMode = (phase === WorkoutPhase.PREP && currentExercise.prepTime >= 6);
+
               // If we're in a motivation window, skip non-critical numbers.
               const suppressed = Date.now() < suppressCountdownUntilMsRef.current;
               const critical = currSec <= 3; // keep the last few seconds always spoken
@@ -160,7 +164,7 @@ useEffect(() => {
               } else if (phase === WorkoutPhase.PREP && currSec === 1) {
                 // Go! instead of "1"
                 (async () => {
-                  try { await playBlobFit(await getOrGenerateCore(exercises, 'go'), 0.7); } catch { tts.speak('Go!', true); }
+                  try { await playBlobFit(await getOrGenerateCore(exercises, pickGoToken(exerciseIndex + currSec)), 0.7); } catch { tts.speak('Go!', true); }
                 })();
               } else if ((phase === WorkoutPhase.PREP && currentExercise.prepTime >= 8 && currSec === 8) || (phase === WorkoutPhase.COOL && currentExercise.coolingTime >= 10 && currSec === 10)) {
                 // Play a longer motivation line and skip a few numbers so it doesn't feel rushed.
@@ -170,7 +174,7 @@ useEffect(() => {
                   try { await playBlobFit(await getOrGenerateCore(exercises, tok), 2.2); } catch { /* ignore */ }
                 })();
               } else {
-                if (!suppressed || critical) {
+                if ((!prepHumanMode && (!suppressed || critical)) || (prepHumanMode && critical) || (!prepHumanMode && !suppressed)) {
                   (async () => {
                     try { await playBlobFit(await getOrGenerateCore(exercises, `n:${currSec}`), 0.95); }
                     catch { tts.speak(currSec.toString(), true); }

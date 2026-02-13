@@ -60,6 +60,19 @@ async function dbPut(value: StoredAudio) {
   db.close();
 }
 
+
+async function dbKeys(): Promise<string[]> {
+  const db = await openDb();
+  const keys = await new Promise<string[]>((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readonly');
+    const req = tx.objectStore(STORE).getAllKeys();
+    req.onsuccess = () => resolve((req.result as any[]).map(String));
+    req.onerror = () => reject(req.error);
+  });
+  db.close();
+  return keys;
+}
+
 async function dbGet(key: string): Promise<StoredAudio | null> {
   const db = await openDb();
   const result = await new Promise<StoredAudio | null>((resolve, reject) => {
@@ -142,6 +155,13 @@ export function buildCoreScript(token: string) {
   if (token === 'mot_8') return "You’re building momentum.";
   if (token === 'mot_9') return "Control the pace. Own the rep.";
   if (token === 'mot_10') return "You’re doing the work. Respect.";
+  // Start variants
+  if (token === 'go_1') return 'Go!';
+  if (token === 'go_2') return 'Start!';
+  if (token === 'go_3') return 'Begin!';
+  if (token === 'go_4') return 'Now!';
+  if (token === 'go_5') return 'Take off!';
+  // Back-compat
   if (token === 'go') return 'Go!';
   if (token === 'rest') return 'Rest.';
   if (token === 'workout_complete') return 'Workout complete. Great job.';
@@ -265,4 +285,33 @@ export async function getOrGenerateMotivation(exercises: Exercise[], ex: Exercis
   const blob = await ttsFromServer(script);
   await saveGuidance(key, blob);
   return blob;
+}
+
+
+export async function getCacheStatus(exercises: Exercise[]) {
+  const existing = new Set(await dbKeys());
+
+  const expected: string[] = [];
+
+  // Core tokens
+  const coreTokens: string[] = [];
+  for (let n = 1; n <= 180; n++) coreTokens.push(`n:${n}`);
+  coreTokens.push('get_ready', 'rest', 'workout_complete', 'prep_motivation', 'prep_motivation_2', 'cool_motivation');
+  coreTokens.push('go_1', 'go_2', 'go_3', 'go_4', 'go_5');
+  for (let i = 1; i <= 10; i++) coreTokens.push(`mot_${i}`);
+
+  for (const t of coreTokens) {
+    expected.push(await guidanceKey(exercises, { token: t }, 'core', t));
+  }
+
+  // Per-exercise announce + per-exercise motivation
+  for (const ex of exercises) {
+    expected.push(await guidanceKey(exercises, {}, 'exercise_announce', ex.id));
+    expected.push(await guidanceKey(exercises, {}, 'motivation', ex.id));
+  }
+
+  let cached = 0;
+  for (const k of expected) if (existing.has(k)) cached++;
+  const total = expected.length;
+  return { cached, total, missing: Math.max(0, total - cached) };
 }

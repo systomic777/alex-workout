@@ -20,6 +20,7 @@ const DataManagement: React.FC<DataManagementProps> = ({ exercises, onImport, on
   // Voice settings
   const [voiceInfo, setVoiceInfo] = useState(tts.getVoice());
   const [voices, setVoices] = useState<Array<{name: string; lang: string}>>([]);
+  const [cacheStatus, setCacheStatus] = useState<{cached:number; total:number; missing:number} | null>(null);
 
   // Toast State
   const [toast, setToast] = useState<{ show: boolean, msg: string, type: ToastType }>({
@@ -41,6 +42,7 @@ const DataManagement: React.FC<DataManagementProps> = ({ exercises, onImport, on
     try {
       setVoiceInfo(tts.getVoice());
       setVoices(tts.listNativeVoices());
+      import('../utils/guidance').then(m => m.getCacheStatus(exercises)).then(setCacheStatus).catch(() => {});
     } catch {
       // ignore
     }
@@ -141,6 +143,7 @@ const DataManagement: React.FC<DataManagementProps> = ({ exercises, onImport, on
             <div>
               <h3 className="text-sm font-medium text-slate-200">Voice</h3>
               <p className="text-xs text-slate-500">Engine: <span className="text-slate-300">{voiceInfo.lastEngine}</span>{voiceInfo.lastCloudError ? <span className="text-red-400"> • cloud error: {voiceInfo.lastCloudError}</span> : null}</p>
+              <p className="text-[11px] text-slate-500">Cache: {cacheStatus ? <span className="text-slate-300">{cacheStatus.cached}/{cacheStatus.total}</span> : <span className="text-slate-400">—</span>} {cacheStatus && cacheStatus.missing > 0 ? <span className="text-amber-300">• missing {cacheStatus.missing}</span> : null}</p>
             </div>
             <div className="flex gap-2">
               <Button variant="secondary" size="sm" type="button" onClick={() => { refreshVoice(); showToast('Voice info refreshed', 'info'); }}>Refresh</Button>
@@ -176,7 +179,11 @@ const DataManagement: React.FC<DataManagementProps> = ({ exercises, onImport, on
                     await getOrGenerateCore(exercises, `mot_${i}`);
                   }
                   await getOrGenerateCore(exercises, 'get_ready');
-                  await getOrGenerateCore(exercises, 'go');
+                  await getOrGenerateCore(exercises, 'go_1');
+                  await getOrGenerateCore(exercises, 'go_2');
+                  await getOrGenerateCore(exercises, 'go_3');
+                  await getOrGenerateCore(exercises, 'go_4');
+                  await getOrGenerateCore(exercises, 'go_5');
                   await getOrGenerateCore(exercises, 'rest');
                   await getOrGenerateCore(exercises, 'workout_complete');
 
@@ -193,6 +200,7 @@ const DataManagement: React.FC<DataManagementProps> = ({ exercises, onImport, on
 
                   showToast('Guidance generated ✅', 'success');
                   refreshVoice();
+                  try { const cs = await (await import('../utils/guidance')).getCacheStatus(exercises); setCacheStatus(cs); } catch {}
                 } catch (e: any) {
                   showToast(`Guidance failed: ${e?.message || 'unknown error'}`, 'error');
                 }
