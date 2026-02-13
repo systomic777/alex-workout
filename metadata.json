@@ -1,0 +1,5 @@
+{
+  "name": "Alex Workout",
+  "description": "A customizable workout guidance app with voice-assisted countdowns, prep timers, and CSV data management.",
+  "requestFramePermissions": []
+}
