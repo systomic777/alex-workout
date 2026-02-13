@@ -5,6 +5,7 @@ import { Exercise, WorkoutPhase } from '../types';
 import CircularTimer from '../components/CircularTimer';
 import { tts } from '../utils/tts';
 import { getOrGenerateCore, getOrGenerateExerciseAnnounce, playBlob, playBlobFit } from '../utils/guidance';
+import { scheduleRepCount, scheduleCountdown, stopScheduledAudio } from '../utils/scheduler';
 import { Button } from '../components/Button';
 
 interface WorkoutSessionProps {
@@ -56,17 +57,21 @@ const WorkoutSession: React.FC<WorkoutSessionProps> = ({ exercises }) => {
   const startPhase = useCallback((newPhase: WorkoutPhase) => {
     setPhase(newPhase);
     setupPhaseTimer(newPhase);
-    if (newPhase === WorkoutPhase.WORK) {
-        (async () => {
-            try { await playBlobFit(await getOrGenerateCore(exercises, `n:${currentExercise.reps}`), Math.max(0.6, currentExercise.repDuration * 0.9)); } catch { tts.speak(currentExercise.reps.toString(), true); }
-          })();
-        lastRepBoundary.current = 0; // First rep (total count) announced
-    } else if (newPhase === WorkoutPhase.COOL) {
-          (async () => {
-            try { await playBlob(await getOrGenerateCore(exercises, `rest`)); } catch { tts.speak("Rest", true); }
-          })();
-}
-  }, [currentExercise, setupPhaseTimer]);
+
+    // Use WebAudio scheduler for stable timing and zero overlaps
+    try {
+      if (newPhase === WorkoutPhase.PREP) {
+        scheduleCountdown(exercises, Math.round(currentExercise.prepTime), 'prep', exerciseIndex).catch(() => {});
+      } else if (newPhase === WorkoutPhase.WORK) {
+        scheduleRepCount(exercises, currentExercise.reps, Math.max(0.45, currentExercise.repDuration)).catch(() => {});
+        lastRepBoundary.current = 0;
+      } else if (newPhase === WorkoutPhase.COOL) {
+        scheduleCountdown(exercises, Math.round(currentExercise.coolingTime), 'cool', exerciseIndex).catch(() => {});
+      }
+    } catch {
+      // ignore
+    }
+  }, [currentExercise, setupPhaseTimer, exercises, exerciseIndex]);
 
   useEffect(() => {
     if (!exercises.length || !currentExercise) return;
@@ -120,9 +125,10 @@ useEffect(() => {
         return; 
     }
     tts.warmup();
-    return () => { 
-        cancelAnimationFrame(frameRef.current); 
-        tts.cancel(); 
+    return () => {
+        cancelAnimationFrame(frameRef.current);
+        tts.cancel();
+        stopScheduledAudio();
     };
   }, [exercises.length, navigate]);
 
@@ -136,74 +142,6 @@ useEffect(() => {
       
       setTimeLeftMs((prev) => {
         const next = Math.max(0, prev - delta);
-        
-        // Handle PREP/COOL voice countdown (every second)
-        if (phase === WorkoutPhase.PREP || phase === WorkoutPhase.COOL) {
-          const prevSec = Math.ceil(prev / 1000);
-          const currSec = Math.ceil(next / 1000);
-
-          if (prevSec > currSec) {
-            // Never speak 0
-            if (currSec <= 0) {
-              // no-op
-            } else {
-              const initialSec = Math.ceil(totalTimeMs / 1000);
-
-              // Human mode: for long PREP, prefer short coaching lines over counting every number.
-              const prepHumanMode = (phase === WorkoutPhase.PREP && currentExercise.prepTime >= 6);
-
-              // If we're in a motivation window, skip non-critical numbers.
-              const suppressed = Date.now() < suppressCountdownUntilMsRef.current;
-              const critical = currSec <= 3; // keep the last few seconds always spoken
-
-              if (phase === WorkoutPhase.PREP && currentExercise.prepTime > 2 && currSec === initialSec) {
-                // "Get ready" replaces the first number (after exercise name).
-                (async () => {
-                  try { await playBlobFit(await getOrGenerateCore(exercises, 'get_ready'), 1.2); } catch { /* ignore */ }
-                })();
-              } else if (phase === WorkoutPhase.PREP && currSec === 1) {
-                // Go! instead of "1"
-                (async () => {
-                  try { await playBlobFit(await getOrGenerateCore(exercises, pickGoToken(exerciseIndex + currSec)), 0.7); } catch { tts.speak('Go!', true); }
-                })();
-              } else if ((phase === WorkoutPhase.PREP && currentExercise.prepTime >= 8 && currSec === 8) || (phase === WorkoutPhase.COOL && currentExercise.coolingTime >= 10 && currSec === 10)) {
-                // Play a longer motivation line and skip a few numbers so it doesn't feel rushed.
-                suppressCountdownUntilMsRef.current = Date.now() + 2400;
-                const tok = pickMotToken(exerciseIndex + currSec);
-                (async () => {
-                  try { await playBlobFit(await getOrGenerateCore(exercises, tok), 2.2); } catch { /* ignore */ }
-                })();
-              } else {
-                // Long PREP: keep it voiced the whole time, but less robotic.
-                if (prepHumanMode && phase === WorkoutPhase.PREP && currSec > 3) {
-                  const sayNumber = (currSec % 2 === 0); // alternate
-                  if (sayNumber) {
-                    (async () => {
-                      try { await playBlobFit(await getOrGenerateCore(exercises, `n:${currSec}`), 0.9); }
-                      catch { tts.speak(currSec.toString(), true); }
-                    })();
-                  } else {
-                    const tok = pickMotToken(exerciseIndex + currSec);
-                    (async () => {
-                      try { await playBlobFit(await getOrGenerateCore(exercises, tok), 0.95); }
-                      catch { /* ignore */ }
-                    })();
-                  }
-                } else {
-                  // Default behavior: speak every second unless we're inside a motivation window.
-                  if (!suppressed || critical) {
-                    (async () => {
-                      try { await playBlobFit(await getOrGenerateCore(exercises, `n:${currSec}`), 0.95); }
-                      catch { tts.speak(currSec.toString(), true); }
-                    })();
-                  }
-                }
-              }
-            }
-          }
-        }
-
-        // Handle WORK voice reps
         if (phase === WorkoutPhase.WORK) {
             const elapsedPrev = totalTimeMs - prev;
             const elapsedNext = totalTimeMs - next;
@@ -265,6 +203,10 @@ useEffect(() => {
   const handleTogglePause = () => {
     tts.warmup();
     setIsPaused(!isPaused);
+    if (!isPaused) {
+      // we are pausing
+      stopScheduledAudio();
+    }
   };
 
   if (phase === WorkoutPhase.FINISHED) {
