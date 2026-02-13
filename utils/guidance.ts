@@ -304,10 +304,14 @@ export async function getCacheStatus(exercises: Exercise[]) {
     expected.push(await guidanceKey(exercises, { token: t }, 'core', t));
   }
 
-  // Per-exercise announce + per-exercise motivation
-  for (const ex of exercises) {
+  // Per-exercise announce + (sprinkled) per-exercise motivation
+  for (let i = 0; i < exercises.length; i++) {
+    const ex = exercises[i];
     expected.push(await guidanceKey(exercises, {}, 'exercise_announce', ex.id));
-    expected.push(await guidanceKey(exercises, {}, 'motivation', ex.id));
+    // We only generate motivation for ~every 4th exercise (matches Settings → Generate).
+    if (i % 4 === 0) {
+      expected.push(await guidanceKey(exercises, {}, 'motivation', ex.id));
+    }
   }
 
   let cached = 0;
