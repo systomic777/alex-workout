@@ -123,12 +123,22 @@ export async function scheduleCountdown(exercises: Exercise[], seconds: number, 
   const pickGo = () => `go_${((seed % 5) + 1)}`;
   const pickMot = (n: number) => `mot_${(((seed + n) % 10) + 1)}`;
 
+  // Strategy for long countdowns (>=10):
+  // - Set pace with "10, 9"
+  // - Insert an UNRUSHED motivation segment spanning multiple seconds
+  // - Finish with "3, 2, Go!"
+  //
+  // For 10s+: we speak 10 at t=10 and 9 at t=9, then play 1 long motivation at t=8,
+  // skip speaking at t=7..5, then resume 4, 3, 2, Go!
+
+  const longMode = seconds >= 10;
+  const motStart = 8;
+  const motLenSec = 4; // covers 8..5
+
   for (let t = seconds; t >= 1; t--) {
     const when = start + (seconds - t);
 
-    // last seconds are always numbers/Go
-    const critical = t <= 3;
-
+    // Go!
     if (phase === 'prep' && t === 1) {
       const buf = await getBuffer(exercises, pickGo());
       const rate = Math.min(1.4, Math.max(0.95, buf.duration / (0.7 * 0.9)));
@@ -136,8 +146,56 @@ export async function scheduleCountdown(exercises: Exercise[], seconds: number, 
       continue;
     }
 
-    // For long countdowns, alternate number/motivation on non-critical seconds
-    if (!critical && seconds >= 6) {
+    // Always preserve the last 3 seconds (3,2) for both prep and cool
+    const isFinal = t <= 3;
+    if (isFinal) {
+      const buf = await getBuffer(exercises, `n:${t}`);
+      const rate = Math.min(1.35, Math.max(0.95, buf.duration / (0.95 * 0.9)));
+      scheduleBuffer(buf, when, rate, 1.0);
+      continue;
+    }
+
+    // Long-mode pacing start: always speak 10,9 if present
+    if (longMode && (t === 10 || t === 9)) {
+      const buf = await getBuffer(exercises, `n:${t}`);
+      const rate = Math.min(1.35, Math.max(0.95, buf.duration / (0.95 * 0.9)));
+      scheduleBuffer(buf, when, rate, 1.0);
+      continue;
+    }
+
+    // Long-mode motivation segment
+    if (longMode) {
+      if (t == motStart) {
+        const tok = pickMot(t);
+        const buf = await getBuffer(exercises, tok);
+        // Fit the whole phrase into ~4 seconds (unrushed)
+        const target = motLenSec * 0.92;
+        const desired = buf.duration / (target * 0.90);
+        const rate = Math.min(1.20, Math.max(0.90, desired));
+        scheduleBuffer(buf, when, rate, 1.0);
+        continue;
+      }
+      // Skip 7..5 (the motivation is playing)
+      if (t < motStart && t >= motStart - (motLenSec - 1)) {
+        continue;
+      }
+      // Resume at 4 (and then final seconds handled above)
+      if (t == 4) {
+        const buf = await getBuffer(exercises, `n:${t}`);
+        const rate = Math.min(1.35, Math.max(0.95, buf.duration / (0.95 * 0.9)));
+        scheduleBuffer(buf, when, rate, 1.0);
+        continue;
+      }
+
+      // For anything above 10 (e.g. 12,11) speak numbers to keep pace
+      const buf = await getBuffer(exercises, `n:${t}`);
+      const rate = Math.min(1.35, Math.max(0.95, buf.duration / (0.95 * 0.9)));
+      scheduleBuffer(buf, when, rate, 1.0);
+      continue;
+    }
+
+    // Short countdowns (<10): alternate number/motivation lightly on non-final seconds
+    if (seconds >= 6) {
       const sayNumber = (t % 2 === 0);
       const token = sayNumber ? `n:${t}` : pickMot(t);
       const buf = await getBuffer(exercises, token);
@@ -147,7 +205,7 @@ export async function scheduleCountdown(exercises: Exercise[], seconds: number, 
       continue;
     }
 
-    // default: number
+    // default number
     const buf = await getBuffer(exercises, `n:${t}`);
     const rate = Math.min(1.35, Math.max(0.95, buf.duration / (0.95 * 0.9)));
     scheduleBuffer(buf, when, rate, 1.0);
